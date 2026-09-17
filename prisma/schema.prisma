@@ -1,0 +1,337 @@
+// Prisma schema for the Internship Management Portal.
+// Describes every table the app needs, matching services/mockApi/* (the
+// mock data layer this frontend currently runs on) and the project spec's
+// class diagram (IMP/Diagrams Documentation.txt).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+  supervisor
+  intern
+}
+
+enum ApplicationStatus {
+  Pending
+  Accepted
+  Rejected
+  Cancelled
+}
+
+enum TeamStatus {
+  Planned
+  Active
+  Completed
+  Cancelled
+}
+
+enum AssignmentStatus {
+  Pending
+  InProgress
+  Submitted
+  Evaluated
+  Late
+}
+
+enum AssignmentPriority {
+  Low
+  Medium
+  High
+}
+
+enum SubmissionStatus {
+  Submitted
+  UnderReview
+  Accepted
+  Rejected
+}
+
+enum AttendanceStatus {
+  Present
+  Absent
+  Late
+  Justified
+}
+
+enum DocumentRequestStatus {
+  Pending
+  Submitted
+  Approved
+  Rejected
+  Cancelled
+}
+
+enum DocumentType {
+  CV
+  MotivationLetter
+  InternshipAgreement
+  IdentityDocument
+  Report
+  Certificate
+  Other
+}
+
+enum DocumentStatus {
+  Pending
+  Approved
+  Rejected
+}
+
+enum NotificationType {
+  Application
+  Assignment
+  Document
+  Attendance
+  Evaluation
+  System
+}
+
+enum CalendarEventType {
+  start
+  end
+  holiday
+  event
+}
+
+/// A single row per person; `role` decides which of the optional
+/// supervisor-only / intern-only fields are actually used.
+model User {
+  id          Int      @id @default(autoincrement())
+  role        Role
+  firstName   String
+  lastName    String
+  email       String   @unique
+  password    String // bcrypt hash, never the plaintext password
+  phoneNumber String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  // Relative path under /uploads (e.g. "/uploads/xyz.jpg"), same as every
+  // other uploaded file in this app - see middleware/upload.js. NOT a
+  // base64 data: URL: MySQL/MariaDB's default max_allowed_packet (1MB) is
+  // too small for a base64-encoded photo sent as a JSON field.
+  profilePhotoUrl String? @db.Text
+
+  // supervisor-only
+  specialization String?
+  department     String?
+
+  // intern-only
+  studentId        String?
+  university       String?
+  fieldOfStudy     String?
+  academicLevel    String?
+  registrationDate DateTime?
+  cvPath           String?
+  teamId           Int?
+  team             Team?     @relation("TeamInterns", fields: [teamId], references: [id])
+
+  supervisingTeams      Team[]             @relation("TeamSupervisor")
+  acceptedApplication   Application?       @relation("ApplicationIntern")
+  assignmentsSupervised Assignment[]       @relation("AssignmentSupervisor")
+  assignmentsAssigned   Assignment[]       @relation("AssignmentIntern")
+  submissions           Submission[]
+  attendanceAsIntern    Attendance[]       @relation("AttendanceIntern")
+  attendanceRecordedBy  Attendance[]       @relation("AttendanceSupervisor")
+  documentRequestsFor   DocumentRequest[]  @relation("DocRequestIntern")
+  documentRequestsMade  DocumentRequest[]  @relation("DocRequestAdmin")
+  documents             Document[]
+  notifications         Notification[]
+
+  @@index([teamId])
+}
+
+model Team {
+  id           Int        @id @default(autoincrement())
+  name         String
+  nameFr       String?
+  nameAr       String?
+  description  String?    @db.Text
+  startDate    DateTime
+  endDate      DateTime
+  status       TeamStatus @default(Planned)
+  supervisorId Int?
+  supervisor   User?      @relation("TeamSupervisor", fields: [supervisorId], references: [id])
+
+  interns     User[]       @relation("TeamInterns")
+  assignments Assignment[]
+
+  @@index([supervisorId])
+}
+
+/// A candidate's submission to the internship program. Becomes a `User`
+/// (role = intern) when accepted — see the application-acceptance flow in
+/// the backend build plan doc.
+model Application {
+  id             Int      @id @default(autoincrement())
+  firstName      String
+  lastName       String
+  personalId     String
+  email          String
+  phone          String
+  birthday       DateTime
+  university     String
+  major          String
+  grade          String
+  teamPreference String?
+  startDate      DateTime
+  endDate        DateTime
+
+  // Applicant-chosen password: becomes the login password for the new
+  // intern account if/when this application is accepted.
+  password String
+
+  cvFileName                String?
+  cvFileUrl                 String?
+  photoFileName             String?
+  photoFileUrl              String?
+  agreementFileName         String?
+  agreementFileUrl          String?
+  internshipRequestFileName String?
+  internshipRequestFileUrl  String?
+  otherDocuments            Json? // [{ label, fileName, fileUrl }]
+
+  submissionDate  DateTime          @default(now())
+  status          ApplicationStatus @default(Pending)
+  rejectionReason String?           @db.Text
+  reviewedAt      DateTime?
+
+  internId Int?  @unique
+  intern   User? @relation("ApplicationIntern", fields: [internId], references: [id])
+
+  cvStatus                          DocumentStatus @default(Pending)
+  cvRejectionReason                 String?        @db.Text
+  photoStatus                       DocumentStatus @default(Pending)
+  photoRejectionReason              String?        @db.Text
+  agreementStatus                   DocumentStatus @default(Pending)
+  agreementRejectionReason          String?        @db.Text
+  internshipRequestStatus           DocumentStatus @default(Pending)
+  internshipRequestRejectionReason  String?        @db.Text
+
+  @@index([status])
+}
+
+model Assignment {
+  id           Int                @id @default(autoincrement())
+  teamId       Int
+  team         Team               @relation(fields: [teamId], references: [id])
+  supervisorId Int
+  supervisor   User               @relation("AssignmentSupervisor", fields: [supervisorId], references: [id])
+  internId     Int
+  intern       User               @relation("AssignmentIntern", fields: [internId], references: [id])
+  title        String
+  description  String             @db.Text
+  creationDate DateTime           @default(now())
+  deadline     DateTime
+  status       AssignmentStatus   @default(Pending)
+  priority     AssignmentPriority @default(Medium)
+
+  submissions Submission[]
+
+  @@index([teamId])
+  @@index([supervisorId])
+  @@index([internId])
+}
+
+model Submission {
+  id             Int              @id @default(autoincrement())
+  assignmentId   Int
+  assignment     Assignment       @relation(fields: [assignmentId], references: [id])
+  internId       Int
+  intern         User             @relation(fields: [internId], references: [id])
+  fileName       String
+  fileUrl        String
+  notes          String?          @db.Text
+  submissionDate DateTime         @default(now())
+  version        Int              @default(1)
+  grade          Float?
+  feedback       String?          @db.Text
+  status         SubmissionStatus @default(Submitted)
+
+  @@index([assignmentId])
+  @@index([internId])
+}
+
+model Attendance {
+  id            Int              @id @default(autoincrement())
+  internId      Int
+  intern        User             @relation("AttendanceIntern", fields: [internId], references: [id])
+  supervisorId  Int
+  supervisor    User             @relation("AttendanceSupervisor", fields: [supervisorId], references: [id])
+  date          DateTime         @db.Date
+  arrivalTime   String?
+  departureTime String?
+  status        AttendanceStatus
+  remarks       String?          @db.Text
+
+  @@unique([internId, date])
+  @@index([supervisorId])
+}
+
+model DocumentRequest {
+  id              Int                   @id @default(autoincrement())
+  internId        Int
+  intern          User                  @relation("DocRequestIntern", fields: [internId], references: [id])
+  adminId         Int
+  admin           User                  @relation("DocRequestAdmin", fields: [adminId], references: [id])
+  title           String
+  description     String                @db.Text
+  requestDate     DateTime              @default(now())
+  deadline        DateTime
+  status          DocumentRequestStatus @default(Pending)
+  rejectionReason String?               @db.Text
+
+  documents Document[]
+
+  @@index([internId])
+  @@index([adminId])
+}
+
+model Document {
+  id              Int             @id @default(autoincrement())
+  requestId       Int
+  request         DocumentRequest @relation(fields: [requestId], references: [id])
+  internId        Int
+  intern          User            @relation(fields: [internId], references: [id])
+  fileName        String
+  fileUrl         String
+  documentType    DocumentType
+  uploadDate      DateTime        @default(now())
+  version         Int             @default(1)
+  status          DocumentStatus  @default(Pending)
+  rejectionReason String?         @db.Text
+
+  @@index([requestId])
+  @@index([internId])
+}
+
+/// Stores an i18n key + params (not rendered text) so the frontend can keep
+/// rendering notifications in whichever language the viewer has active.
+/// Do NOT pre-render text into `titleKey`/`messageKey` server-side.
+model Notification {
+  id               Int              @id @default(autoincrement())
+  userId           Int
+  user             User             @relation(fields: [userId], references: [id])
+  titleKey         String
+  messageKey       String
+  params           Json?
+  notificationType NotificationType
+  link             String?
+  creationDate     DateTime         @default(now())
+  isRead           Boolean          @default(false)
+
+  @@index([userId])
+}
+
+model CalendarEvent {
+  id    Int               @id @default(autoincrement())
+  title String
+  date  DateTime          @db.Date
+  type  CalendarEventType
+}
