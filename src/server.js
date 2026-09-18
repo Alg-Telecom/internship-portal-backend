@@ -2,9 +2,18 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const cookieParser = require('cookie-parser');
+const path = require("path");
 const authRoutes = require('./routes/authRoutes');
 const usersRoutes = require('./routes/usersRoutes');
 const teamsRoutes = require('./routes/teamsRoutes');
+const notificationsRoutes = require('./routes/notificationsRoutes');
+const applicationsRoutes = require('./routes/applicationsRoutes');
+const assignmentsRoutes = require('./routes/assignmentsRoutes');
+const submissionsRoutes = require('./routes/submissionsRoutes');
+const documentRequestsRoutes = require('./routes/documentRequestsRoutes');
+const documentsRoutes = require('./routes/documentsRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
+const calendarEventsRoutes = require('./routes/calendarEventsRoutes');
 const pool = require("./config/db");
 
 const app = express();
@@ -15,10 +24,19 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/teams', teamsRoutes);
+app.use('/api/notifications', notificationsRoutes);
+app.use('/api/applications', applicationsRoutes);
+app.use('/api/assignments', assignmentsRoutes);
+app.use('/api/submissions', submissionsRoutes);
+app.use('/api/document-requests', documentRequestsRoutes);
+app.use('/api/documents', documentsRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/calendar-events', calendarEventsRoutes);
 
 app.get("/", (req, res) => {
   res.send("Internship Management Portal API is running!");
