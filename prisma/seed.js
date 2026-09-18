@@ -1,11 +1,4 @@
-/**
- * Prisma seed script — loads the exact same demo dataset the frontend's
- * mock API ships with (frontend/src/services/mockApi/seed.js) into the
- * real MySQL database, so the app has something to click through as soon
- * as the real backend is wired up.
- *
- * Run with: npm run prisma:seed   (defined in backend/package.json)
- */
+
 
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
@@ -14,8 +7,6 @@ const prisma = new PrismaClient();
 
 const DEMO_PASSWORD = 'Password123';
 
-// Same relative-day-offset helper as the frontend seed, so dates stay
-// "fresh" (relative to today) no matter when this script is run.
 const today = new Date();
 function offsetDate(offsetDays = 0) {
   const d = new Date(today);
@@ -28,7 +19,6 @@ async function main() {
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
 
   console.log('Clearing existing data...');
-  // Children first, respecting foreign keys.
   await prisma.notification.deleteMany();
   await prisma.calendarEvent.deleteMany();
   await prisma.document.deleteMany();
@@ -37,8 +27,7 @@ async function main() {
   await prisma.submission.deleteMany();
   await prisma.assignment.deleteMany();
   await prisma.application.deleteMany();
-  // Teams reference users (supervisorId) and users reference teams
-  // (teamId) — break the cycle by nulling teamId before deleting either.
+ 
   await prisma.user.updateMany({ data: { teamId: null } });
   await prisma.team.deleteMany();
   await prisma.user.deleteMany();
@@ -536,12 +525,7 @@ async function main() {
   }
 
   console.log('Creating notifications...');
-  // NOTE: the schema's Notification.titleKey/messageKey are meant to hold
-  // i18n keys (resolved client-side), but this demo dataset only has
-  // plain English text, same as the frontend's mock seed. We store the
-  // literal text directly — good enough for demo data to click through;
-  // real notifications created by the backend later should use actual
-  // translation keys instead.
+ 
   const notificationsData = [
     {
       id: 1,

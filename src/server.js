@@ -3,6 +3,8 @@ const cors = require("cors");
 require("dotenv").config();
 const cookieParser = require('cookie-parser');
 const authRoutes = require('./routes/authRoutes');
+const usersRoutes = require('./routes/usersRoutes');
+const teamsRoutes = require('./routes/teamsRoutes');
 const pool = require("./config/db");
 
 const app = express();
@@ -15,6 +17,8 @@ app.use(cookieParser());
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/teams', teamsRoutes);
 
 app.get("/", (req, res) => {
   res.send("Internship Management Portal API is running!");
