@@ -1,10 +1,8 @@
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
 const prisma = require('../config/prisma');
-
-function generateTemporaryPassword() {
-  return crypto.randomBytes(6).toString('hex');
-}
+const { generateTemporaryPassword } = require('../utils/password');
+const { sendMail } = require('../utils/mailer');
+const { welcomeUserEmail } = require('../utils/emailTemplates');
 
 function stripPassword(user) {
   const { password, ...safe } = user;
@@ -64,6 +62,15 @@ async function createUser(req, res) {
       },
     });
 
+    // Announce the new account + generated password + role by email.
+    const { subject, html } = welcomeUserEmail({
+      firstName: user.firstName,
+      email: user.email,
+      temporaryPassword,
+      role: user.role,
+    });
+    await sendMail({ to: user.email, subject, html });
+
     return res.status(201).json({ ...stripPassword(user), temporaryPassword });
   } catch (err) {
     console.error(err);
@@ -98,4 +105,59 @@ async function updateOwnProfile(req, res) {
   }
 }
 
-module.exports = { listUsers, getUser, createUser, updateUser, updateOwnProfile };
+// Admin-only hard delete. Users can be tied to assignments, submissions,
+// documents, attendance, etc. — if any of those still reference this user,
+// MySQL's foreign-key constraint rejects the delete (Prisma surfaces this
+// as error code P2003), so we turn that into a clear 409 instead of a raw
+// 500 and point the admin at deactivating the account instead.
+async function deleteUser(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (id === req.user.id) {
+      return res.status(400).json({ message: 'You cannot delete your own account.' });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ message: 'User not found.' });
+
+    await prisma.user.delete({ where: { id } });
+    return res.status(204).send();
+  } catch (err) {
+    if (err.code === 'P2003') {
+      return res.status(409).json({
+        message: 'This user has related records (assignments, submissions, documents, etc.) and cannot be deleted. Deactivate the account instead.',
+      });
+    }
+    console.error(err);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+}
+
+// Called by a logged-in user uploading their own profile photo (see
+// SettingsPage.jsx / ProfilePhotoField.jsx) — multer (upload.single('photo'))
+// has already saved the file to disk by the time this runs.
+async function uploadOwnPhoto(req, res) {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ message: 'A photo file is required.' });
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { profilePhotoUrl: `/uploads/${file.filename}` },
+    });
+    return res.json(stripPassword(user));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+}
+
+module.exports = {
+  listUsers,
+  getUser,
+  createUser,
+  updateUser,
+  deleteUser,
+  updateOwnProfile,
+  uploadOwnPhoto,
+};

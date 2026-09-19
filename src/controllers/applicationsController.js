@@ -1,6 +1,21 @@
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/prisma");
 const { notifyAdmins, createNotification } = require("../utils/notifications");
+const { sendMail } = require("../utils/mailer");
+const { applicationAcceptedEmail, applicationRejectedEmail } = require("../utils/emailTemplates");
+
+// Maps the rejectedField the admin can send in POST /:id/reject to the
+// matching per-document status/reason columns already on Application.
+const REJECTABLE_FIELDS = {
+  cv: { statusField: "cvStatus", reasonField: "cvRejectionReason", label: "CV" },
+  photo: { statusField: "photoStatus", reasonField: "photoRejectionReason", label: "Photo" },
+  agreement: { statusField: "agreementStatus", reasonField: "agreementRejectionReason", label: "Signed agreement" },
+  internshipRequest: {
+    statusField: "internshipRequestStatus",
+    reasonField: "internshipRequestRejectionReason",
+    label: "Internship request letter",
+  },
+};
 
 function stripPassword(application) {
   const { password, ...safe } = application;
@@ -58,6 +73,11 @@ async function submitApplication(req, res) {
         startDate: new Date(body.startDate),
         endDate: new Date(body.endDate),
         password: passwordHash,
+        // Kept in plaintext only until this application is reviewed, so
+        // the accept email can tell the applicant the password they
+        // themselves chose — see acceptApplication/rejectApplication,
+        // both of which null this back out once it's no longer needed.
+        rawPassword: body.password,
         cvFileName: cv?.originalname,
         cvFileUrl: cv ? `/uploads/${cv.filename}` : undefined,
         photoFileName: photo?.originalname,
@@ -116,14 +136,33 @@ async function getApplication(req, res) {
   }
 }
 
-// Accepting an application creates the real intern account, reusing the
-// password the applicant originally chose (already hashed on submit).
+// Accepting an application creates the real intern account. The intern
+// logs in with the SAME password they chose when they applied — we reuse
+// application.password (already a bcrypt hash from submitApplication)
+// rather than generating a new one. That's different from usersController's
+// createUser, where the admin is choosing the account for someone who
+// never set a password themselves, so a system-generated temporary
+// password makes sense there.
 async function acceptApplication(req, res) {
   try {
     const id = Number(req.params.id);
     const application = await prisma.application.findUnique({ where: { id } });
     if (!application)
       return res.status(404).json({ message: "Application not found." });
+    if (application.status !== "Pending") {
+      return res.status(400).json({ message: "This application has already been reviewed." });
+    }
+
+    // Resolve which team the new intern joins: an explicit admin choice
+    // (req.body.teamId) always wins; otherwise fall back to matching the
+    // applicant's own team preference by name.
+    let teamId = req.body.teamId ? Number(req.body.teamId) : null;
+    if (!teamId && application.teamPreference) {
+      const preferredTeam = await prisma.team.findFirst({
+        where: { name: application.teamPreference },
+      });
+      if (preferredTeam) teamId = preferredTeam.id;
+    }
 
     const intern = await prisma.user.create({
       data: {
@@ -131,19 +170,40 @@ async function acceptApplication(req, res) {
         firstName: application.firstName,
         lastName: application.lastName,
         email: application.email,
-        password: application.password, // already a bcrypt hash from submitApplication
+        password: application.password, // reuse the applicant's own hash
         phoneNumber: application.phone,
         university: application.university,
         fieldOfStudy: application.major,
         academicLevel: application.grade,
         registrationDate: new Date(),
         isActive: true,
+        teamId: teamId || undefined,
       },
     });
 
+    // Accepting the application also approves whichever of its documents
+    // were actually submitted (only fields that have a fileUrl — a
+    // document that was never uploaded stays Pending, there's nothing to
+    // approve there).
+    const documentApprovals = {};
+    if (application.cvFileUrl) documentApprovals.cvStatus = "Approved";
+    if (application.photoFileUrl) documentApprovals.photoStatus = "Approved";
+    if (application.agreementFileUrl) documentApprovals.agreementStatus = "Approved";
+    if (application.internshipRequestFileUrl) documentApprovals.internshipRequestStatus = "Approved";
+
+    // Grab the plaintext password now, before we null it out below — this
+    // is the applicant's own chosen password, kept only for this email.
+    const plainPassword = application.rawPassword;
+
     const updated = await prisma.application.update({
       where: { id },
-      data: { status: "Accepted", reviewedAt: new Date(), internId: intern.id },
+      data: {
+        status: "Accepted",
+        reviewedAt: new Date(),
+        internId: intern.id,
+        rawPassword: null, // no longer needed once the email below is sent
+        ...documentApprovals,
+      },
     });
 
     await createNotification({
@@ -155,6 +215,15 @@ async function acceptApplication(req, res) {
       link: "/intern/dashboard",
     });
 
+    const team = teamId ? await prisma.team.findUnique({ where: { id: teamId } }) : null;
+    const { subject, html } = applicationAcceptedEmail({
+      firstName: intern.firstName,
+      email: intern.email,
+      password: plainPassword,
+      teamName: team ? team.name : "To be assigned",
+    });
+    await sendMail({ to: intern.email, subject, html });
+
     return res.json(stripPassword(updated));
   } catch (err) {
     console.error(err);
@@ -162,18 +231,49 @@ async function acceptApplication(req, res) {
   }
 }
 
+// Body: { rejectionReason: string (required), rejectedField?: "cv" | "photo" | "agreement" | "internshipRequest" }
+// When rejectedField is given, the matching per-document status/reason on
+// Application (e.g. cvStatus/cvRejectionReason) is set too, in addition to
+// the application's overall status/rejectionReason.
 async function rejectApplication(req, res) {
   try {
     const id = Number(req.params.id);
-    const { rejectionReason } = req.body;
-    const updated = await prisma.application.update({
-      where: { id },
-      data: {
-        status: "Rejected",
-        reviewedAt: new Date(),
-        rejectionReason: rejectionReason || "",
-      },
+    const { rejectionReason, rejectedField } = req.body;
+    if (!rejectionReason) {
+      return res.status(400).json({ message: "rejectionReason is required." });
+    }
+    if (rejectedField && !REJECTABLE_FIELDS[rejectedField]) {
+      return res.status(400).json({
+        message: `rejectedField must be one of: ${Object.keys(REJECTABLE_FIELDS).join(", ")}`,
+      });
+    }
+
+    const application = await prisma.application.findUnique({ where: { id } });
+    if (!application) return res.status(404).json({ message: "Application not found." });
+
+    const data = {
+      status: "Rejected",
+      reviewedAt: new Date(),
+      rejectionReason,
+      rawPassword: null, // no longer needed — this application won't become an account
+    };
+    let rejectedFieldLabel = null;
+    if (rejectedField) {
+      const { statusField, reasonField, label } = REJECTABLE_FIELDS[rejectedField];
+      data[statusField] = "Rejected";
+      data[reasonField] = rejectionReason;
+      rejectedFieldLabel = label;
+    }
+
+    const updated = await prisma.application.update({ where: { id }, data });
+
+    const { subject, html } = applicationRejectedEmail({
+      firstName: updated.firstName,
+      reason: rejectionReason,
+      rejectedField: rejectedFieldLabel,
     });
+    await sendMail({ to: updated.email, subject, html });
+
     return res.json(stripPassword(updated));
   } catch (err) {
     console.error(err);

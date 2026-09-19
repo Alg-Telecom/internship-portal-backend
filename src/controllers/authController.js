@@ -46,4 +46,32 @@ async function me(req, res) {
   return res.json(req.user);
 }
 
-module.exports = { login, logout, me };
+// req.user (from requireAuth) already has its password stripped, so we
+// re-fetch the full row here to get the hash to compare against.
+async function changePassword(req, res) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'currentPassword and newPassword are required.' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: 'newPassword must be at least 8 characters.' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const matches = await bcrypt.compare(currentPassword, user.password);
+    if (!matches) {
+      return res.status(401).json({ message: 'Current password is incorrect.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: user.id }, data: { password: passwordHash } });
+
+    return res.json({ message: 'Password updated.' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+}
+
+module.exports = { login, logout, me, changePassword };

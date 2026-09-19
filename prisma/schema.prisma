@@ -187,6 +187,13 @@ model Application {
   // intern account if/when this application is accepted.
   password String
 
+  // Plaintext copy of the same password, kept ONLY until the application
+  // is reviewed, so the acceptance email can actually tell the applicant
+  // the password they chose (we only have the bcrypt hash above
+  // afterwards). Cleared back to null as soon as the application is
+  // accepted or rejected — never lingers once it's no longer needed.
+  rawPassword String? @db.Text
+
   cvFileName                String?
   cvFileUrl                 String?
   photoFileName             String?
