@@ -17,6 +17,7 @@ const attendanceRoutes = require("./routes/attendanceRoutes");
 const calendarEventsRoutes = require("./routes/calendarEventsRoutes");
 const pool = require("./config/db");
 const { runDeadlineCheck } = require("./utils/deadlineReminders");
+const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
 
 const app = express();
 
@@ -66,6 +67,12 @@ cron.schedule("0 8 * * *", () => {
   );
 });
 */
+
+// Must come after every route above: catches unmatched routes, then any
+// error that slipped past a controller's own try/catch.
+app.use(notFoundHandler);
+app.use(errorHandler);
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
