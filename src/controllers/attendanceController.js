@@ -1,9 +1,17 @@
 const prisma = require('../config/prisma');
 
+// Built directly from the date string's own year/month/day, in UTC — never
+// through a local Date + setHours(0,0,0,0). That local-time version could
+// silently shift the calendar day by ±1 depending on the server's
+// timezone, which desynced it from what MySQL's `date DATE` column
+// actually stores. That mismatch was letting prisma.attendance.upsert()'s
+// own "does this row already exist" lookup miss an existing row, fall
+// through to CREATE, and then collide with the real (date-only) unique
+// index — surfacing as a confusing P2002 on what should have been an
+// update.
 function startOfDay(dateStr) {
-  const d = new Date(dateStr);
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const [year, month, day] = String(dateStr).slice(0, 10).split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
 async function listAttendance(req, res) {

@@ -112,6 +112,12 @@ model User {
   phoneNumber String?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
+
+  // "Forgot password" flow — set when a reset email is sent, cleared once
+  // the link is used (or when it's used to set a new password). We store
+  // a SHA-256 hash of the token, never the raw value emailed to the user.
+  resetPasswordToken   String?   @unique
+  resetPasswordExpires DateTime?
   // Relative path under /uploads (e.g. "/uploads/xyz.jpg"), same as every
   // other uploaded file in this app - see middleware/upload.js. NOT a
   // base64 data: URL: MySQL/MariaDB's default max_allowed_packet (1MB) is

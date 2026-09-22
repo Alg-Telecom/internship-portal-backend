@@ -6,6 +6,7 @@ const {
   getApplication,
   acceptApplication,
   rejectApplication,
+  approveApplicationDocument,
 } = require('../controllers/applicationsController');
 const { requireAuth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/requireRole');
@@ -32,5 +33,6 @@ router.get('/', requireAuth, requireRole('admin'), listApplications);
 router.get('/:id', requireAuth, requireRole('admin'), getApplication);
 router.post('/:id/accept', requireAuth, requireRole('admin'), acceptApplication);
 router.post('/:id/reject', requireAuth, requireRole('admin'), rejectApplication);
+router.post('/:id/approve-document', requireAuth, requireRole('admin'), approveApplicationDocument);
 
 module.exports = router;

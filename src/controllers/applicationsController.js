@@ -2,14 +2,30 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../config/prisma");
 const { notifyAdmins, createNotification } = require("../utils/notifications");
 const { sendMail } = require("../utils/mailer");
-const { applicationAcceptedEmail, applicationRejectedEmail } = require("../utils/emailTemplates");
+const {
+  applicationAcceptedEmail,
+  applicationRejectedEmail,
+} = require("../utils/emailTemplates");
 
-// Maps the rejectedField the admin can send in POST /:id/reject to the
-// matching per-document status/reason columns already on Application.
+// Maps the rejectedField the admin can send in POST /:id/reject (and now
+// POST /:id/approve-document) to the matching per-document status/reason
+// columns already on Application.
 const REJECTABLE_FIELDS = {
-  cv: { statusField: "cvStatus", reasonField: "cvRejectionReason", label: "CV" },
-  photo: { statusField: "photoStatus", reasonField: "photoRejectionReason", label: "Photo" },
-  agreement: { statusField: "agreementStatus", reasonField: "agreementRejectionReason", label: "Signed agreement" },
+  cv: {
+    statusField: "cvStatus",
+    reasonField: "cvRejectionReason",
+    label: "CV",
+  },
+  photo: {
+    statusField: "photoStatus",
+    reasonField: "photoRejectionReason",
+    label: "Photo",
+  },
+  agreement: {
+    statusField: "agreementStatus",
+    reasonField: "agreementRejectionReason",
+    label: "Signed agreement",
+  },
   internshipRequest: {
     statusField: "internshipRequestStatus",
     reasonField: "internshipRequestRejectionReason",
@@ -83,9 +99,13 @@ async function submitApplication(req, res) {
         photoFileName: photo?.originalname,
         photoFileUrl: photo ? `/uploads/${photo.filename}` : undefined,
         agreementFileName: agreement?.originalname,
-        agreementFileUrl: agreement ? `/uploads/${agreement.filename}` : undefined,
+        agreementFileUrl: agreement
+          ? `/uploads/${agreement.filename}`
+          : undefined,
         internshipRequestFileName: internshipRequest?.originalname,
-        internshipRequestFileUrl: internshipRequest ? `/uploads/${internshipRequest.filename}` : undefined,
+        internshipRequestFileUrl: internshipRequest
+          ? `/uploads/${internshipRequest.filename}`
+          : undefined,
         otherDocuments,
       },
     });
@@ -150,7 +170,9 @@ async function acceptApplication(req, res) {
     if (!application)
       return res.status(404).json({ message: "Application not found." });
     if (application.status !== "Pending") {
-      return res.status(400).json({ message: "This application has already been reviewed." });
+      return res
+        .status(400)
+        .json({ message: "This application has already been reviewed." });
     }
 
     // Resolve which team the new intern joins: an explicit admin choice
@@ -184,12 +206,15 @@ async function acceptApplication(req, res) {
     // Accepting the application also approves whichever of its documents
     // were actually submitted (only fields that have a fileUrl — a
     // document that was never uploaded stays Pending, there's nothing to
-    // approve there).
+    // approve there). Documents already approved individually beforehand
+    // (see approveApplicationDocument below) are simply reconfirmed here.
     const documentApprovals = {};
     if (application.cvFileUrl) documentApprovals.cvStatus = "Approved";
     if (application.photoFileUrl) documentApprovals.photoStatus = "Approved";
-    if (application.agreementFileUrl) documentApprovals.agreementStatus = "Approved";
-    if (application.internshipRequestFileUrl) documentApprovals.internshipRequestStatus = "Approved";
+    if (application.agreementFileUrl)
+      documentApprovals.agreementStatus = "Approved";
+    if (application.internshipRequestFileUrl)
+      documentApprovals.internshipRequestStatus = "Approved";
 
     // Grab the plaintext password now, before we null it out below — this
     // is the applicant's own chosen password, kept only for this email.
@@ -215,7 +240,9 @@ async function acceptApplication(req, res) {
       link: "/intern/dashboard",
     });
 
-    const team = teamId ? await prisma.team.findUnique({ where: { id: teamId } }) : null;
+    const team = teamId
+      ? await prisma.team.findUnique({ where: { id: teamId } })
+      : null;
     const { subject, html } = applicationAcceptedEmail({
       firstName: intern.firstName,
       email: intern.email,
@@ -249,7 +276,8 @@ async function rejectApplication(req, res) {
     }
 
     const application = await prisma.application.findUnique({ where: { id } });
-    if (!application) return res.status(404).json({ message: "Application not found." });
+    if (!application)
+      return res.status(404).json({ message: "Application not found." });
 
     const data = {
       status: "Rejected",
@@ -259,7 +287,8 @@ async function rejectApplication(req, res) {
     };
     let rejectedFieldLabel = null;
     if (rejectedField) {
-      const { statusField, reasonField, label } = REJECTABLE_FIELDS[rejectedField];
+      const { statusField, reasonField, label } =
+        REJECTABLE_FIELDS[rejectedField];
       data[statusField] = "Rejected";
       data[reasonField] = rejectionReason;
       rejectedFieldLabel = label;
@@ -281,6 +310,39 @@ async function rejectApplication(req, res) {
   }
 }
 
+// Body: { field: "cv" | "photo" | "agreement" | "internshipRequest" }
+// Approves ONE document on an application without deciding the whole
+// application — the admin can accept the CV today and the photo tomorrow,
+// then make the final accept/reject call once everything's been reviewed.
+// Does not touch application.status; the final decision still goes through
+// acceptApplication/rejectApplication above.
+async function approveApplicationDocument(req, res) {
+  try {
+    const id = Number(req.params.id);
+    const { field } = req.body;
+    if (!field || !REJECTABLE_FIELDS[field]) {
+      return res.status(400).json({
+        message: `field must be one of: ${Object.keys(REJECTABLE_FIELDS).join(", ")}`,
+      });
+    }
+
+    const application = await prisma.application.findUnique({ where: { id } });
+    if (!application)
+      return res.status(404).json({ message: "Application not found." });
+
+    const { statusField, reasonField } = REJECTABLE_FIELDS[field];
+    const updated = await prisma.application.update({
+      where: { id },
+      data: { [statusField]: "Approved", [reasonField]: null },
+    });
+
+    return res.json(stripPassword(updated));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Something went wrong." });
+  }
+}
+
 module.exports = {
   checkEmailExists,
   submitApplication,
@@ -288,4 +350,5 @@ module.exports = {
   getApplication,
   acceptApplication,
   rejectApplication,
+  approveApplicationDocument,
 };

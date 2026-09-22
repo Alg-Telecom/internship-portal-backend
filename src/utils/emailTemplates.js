@@ -78,10 +78,23 @@ function documentRequestDeadlineEmail({ firstName, title, deadline, isOverdue })
   };
 }
 
+function forgotPasswordEmail({ firstName, resetUrl }) {
+  return {
+    subject: 'Reset your password',
+    html: `
+      <p>Hi ${firstName},</p>
+      <p>We received a request to reset your Internship Management Portal password. Click the link below to choose a new one:</p>
+      <p><a href="${resetUrl}">${resetUrl}</a></p>
+      <p>This link expires in 1 hour. If you didn't request this, you can safely ignore this email — your password won't change.</p>
+    `,
+  };
+}
+
 module.exports = {
   welcomeUserEmail,
   applicationAcceptedEmail,
   applicationRejectedEmail,
   assignmentDeadlineEmail,
   documentRequestDeadlineEmail,
+  forgotPasswordEmail,
 };
