@@ -7,6 +7,13 @@ const storage = multer.diskStorage({
     cb(null, path.join(__dirname, '../../uploads'));
   },
   filename: (req, file, cb) => {
+    // Multer/busboy decode multipart filenames as latin1 by default, but
+    // browsers send the actual bytes as UTF-8 — without this, accented
+    // characters (é, à, ç...) come back mangled (e.g. "Ã©"). Re-decoding
+    // the bytes as UTF-8 fixes it. This mutates the same `file` object
+    // that becomes req.file/req.files, so every controller that reads
+    // file.originalname downstream gets the corrected name for free.
+    file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
     const uniqueName = crypto.randomBytes(16).toString('hex');
     cb(null, `${uniqueName}${path.extname(file.originalname)}`);
   },

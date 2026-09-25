@@ -1,7 +1,4 @@
-// Prisma schema for the Internship Management Portal.
-// Describes every table the app needs, matching services/mockApi/* (the
-// mock data layer this frontend currently runs on) and the project spec's
-// class diagram (IMP/Diagrams Documentation.txt).
+
 
 generator client {
   provider = "prisma-client-js"
@@ -53,6 +50,16 @@ enum SubmissionStatus {
   Rejected
 }
 
+// How an intern handed in work (a submission or a requested document): a
+// single file, a compressed folder (zip/rar/7z/tar...) of a whole project,
+// or a link (GitHub repo, shared Google Doc...). For Link, fileUrl holds
+// the external URL itself.
+enum UploadType {
+  File
+  Archive
+  Link
+}
+
 enum AttendanceStatus {
   Present
   Absent
@@ -66,6 +73,7 @@ enum DocumentRequestStatus {
   Approved
   Rejected
   Cancelled
+  Late // deadline passed while still Pending (set by utils/deadlineReminders)
 }
 
 enum DocumentType {
@@ -258,8 +266,9 @@ model Submission {
   assignment     Assignment       @relation(fields: [assignmentId], references: [id])
   internId       Int
   intern         User             @relation(fields: [internId], references: [id])
+  submissionType UploadType       @default(File)
   fileName       String
-  fileUrl        String
+  fileUrl        String           @db.Text
   notes          String?          @db.Text
   submissionDate DateTime         @default(now())
   version        Int              @default(1)
@@ -312,8 +321,9 @@ model Document {
   request         DocumentRequest @relation(fields: [requestId], references: [id])
   internId        Int
   intern          User            @relation(fields: [internId], references: [id])
+  uploadType      UploadType      @default(File)
   fileName        String
-  fileUrl         String
+  fileUrl         String          @db.Text
   documentType    DocumentType
   uploadDate      DateTime        @default(now())
   version         Int             @default(1)
@@ -322,6 +332,21 @@ model Document {
 
   @@index([requestId])
   @@index([internId])
+}
+
+/// One row per deadline reminder email actually sent, so each one goes out
+/// exactly once even though the check runs on every server start plus
+/// daily (see utils/deadlineReminders.js). `deadline` is part of the key so
+/// that moving an item's deadline makes it eligible for fresh reminders.
+model ReminderLog {
+  id         Int      @id @default(autoincrement())
+  entityType String // "Assignment" | "DocumentRequest"
+  entityId   Int
+  kind       String // "DueSoon" | "Late"
+  deadline   DateTime
+  sentAt     DateTime @default(now())
+
+  @@unique([entityType, entityId, kind, deadline])
 }
 
 /// Stores an i18n key + params (not rendered text) so the frontend can keep

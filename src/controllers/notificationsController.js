@@ -46,4 +46,24 @@ async function markAllAsRead(req, res) {
   }
 }
 
-module.exports = { listMyNotifications, markAsRead, markAllAsRead };
+async function deleteNotification(req, res) {
+  try {
+    const id = Number(req.params.id);
+    const notification = await prisma.notification.findUnique({
+      where: { id },
+    });
+    // Same ownership check as markAsRead — a user can only ever delete
+    // their own notifications, so a missing one and someone else's one
+    // look identical from the outside.
+    if (!notification || notification.userId !== req.user.id) {
+      return res.status(404).json({ message: "Notification not found." });
+    }
+    await prisma.notification.delete({ where: { id } });
+    return res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Something went wrong." });
+  }
+}
+
+module.exports = { listMyNotifications, markAsRead, markAllAsRead, deleteNotification };

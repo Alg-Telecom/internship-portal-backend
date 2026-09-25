@@ -16,7 +16,10 @@ const documentsRoutes = require("./routes/documentsRoutes");
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const calendarEventsRoutes = require("./routes/calendarEventsRoutes");
 const pool = require("./config/db");
-const { runDeadlineCheck } = require("./utils/deadlineReminders");
+const {
+  runDeadlineCheck,
+  markOverdueItems,
+} = require("./utils/deadlineReminders");
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
 
 const app = express();
@@ -66,6 +69,15 @@ cron.schedule("0 8 * * *", () => {
   );
 });
 
+// Hourly, so an assignment/document request whose deadline passed shows as
+// "Late" soon after midnight instead of waiting for the 08:00 run. Only
+// updates statuses — reminder emails stay on the daily schedule above.
+cron.schedule("5 * * * *", () => {
+  markOverdueItems().catch((err) =>
+    console.error("[deadline-check] marking overdue failed:", err),
+  );
+});
+
 // Must come after every route above: catches unmatched routes, then any
 // error that slipped past a controller's own try/catch.
 app.use(notFoundHandler);
@@ -75,6 +87,8 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
+  // Safe to run on every restart: each reminder is logged in ReminderLog
+  // and never sent twice (see utils/deadlineReminders.js).
   // Also run once right when the server starts, on top of the daily 08:00
   // schedule above. node-cron only fires while the process is actually
   // running at that exact minute — it doesn't "catch up" on a check it

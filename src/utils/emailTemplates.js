@@ -18,7 +18,26 @@ function welcomeUserEmail({ firstName, email, temporaryPassword, role }) {
   };
 }
 
-function applicationAcceptedEmail({ firstName, email, password, teamName }) {
+// Same cases as the in-app notification (see applicationsController#
+// acceptApplication): placed in the preferred team, placed in a different
+// one than preferred, or no preference stated. `preferredTeam` is null
+// when the applicant chose "No preference"; `teamName` is "To be assigned"
+// when no team was set yet.
+function teamPreferenceLine({ teamName, preferredTeam, hasTeam }) {
+  if (!preferredTeam) {
+    return hasTeam ? '<p>You did not choose a preferred team, so you have been placed in the team above.</p>' : '';
+  }
+  if (!hasTeam) {
+    return `<p>Your preferred team was <strong>${preferredTeam}</strong>. Your team has not been assigned yet.</p>`;
+  }
+  if (teamName === preferredTeam) {
+    return `<p>Good news: you have been placed in <strong>your preferred team</strong> (${preferredTeam}).</p>`;
+  }
+  return `<p>Your preferred team was <strong>${preferredTeam}</strong>, but you have been placed in <strong>${teamName}</strong> instead, based on the teams' current needs.</p>`;
+}
+
+function applicationAcceptedEmail({ firstName, email, password, teamName, preferredTeam = null }) {
+  const hasTeam = teamName !== 'To be assigned';
   return {
     subject: 'Congratulations — your application has been accepted!',
     html: `
@@ -29,7 +48,9 @@ function applicationAcceptedEmail({ firstName, email, password, teamName }) {
         <li><strong>Email:</strong> ${email}</li>
         <li><strong>Password:</strong> ${password}</li>
         <li><strong>Team:</strong> ${teamName}</li>
+        ${preferredTeam ? `<li><strong>Preferred team:</strong> ${preferredTeam}</li>` : ''}
       </ul>
+      ${teamPreferenceLine({ teamName, preferredTeam, hasTeam })}
     `,
   };
 }

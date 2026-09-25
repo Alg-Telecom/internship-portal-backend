@@ -7,6 +7,7 @@ const {
   deleteUser,
   updateOwnProfile,
   uploadOwnPhoto,
+  deactivateOwnAccount,
 } = require('../controllers/usersController');
 const { requireAuth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/requireRole');
@@ -18,6 +19,7 @@ router.use(requireAuth); // every route below requires a logged-in user
 
 router.patch('/me', updateOwnProfile);
 router.post('/me/photo', upload.single('photo'), uploadOwnPhoto);
+router.post('/me/deactivate', deactivateOwnAccount);
 
 // Read access is also open to supervisors — they legitimately need to look
 // up interns (their own team's members, to record attendance, create

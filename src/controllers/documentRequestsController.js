@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const { createNotification } = require('../utils/notifications');
+const { resolveUpload, discardUpload } = require('../utils/uploadTypes');
 
 async function listDocumentRequests(req, res) {
   try {
@@ -42,8 +43,10 @@ async function getDocumentRequest(req, res) {
 async function createDocumentRequest(req, res) {
   try {
     const { internId, title, description, deadline } = req.body;
-    if (!internId || !title || !description || !deadline) {
-      return res.status(400).json({ message: 'internId, title, description and deadline are required.' });
+    // description ("instructions" in the form) is optional — stored as an
+    // empty string since the column itself is non-nullable.
+    if (!internId || !title || !deadline) {
+      return res.status(400).json({ message: 'internId, title and deadline are required.' });
     }
 
     const request = await prisma.documentRequest.create({
@@ -51,7 +54,7 @@ async function createDocumentRequest(req, res) {
         internId: Number(internId),
         adminId: req.user.id,
         title,
-        description,
+        description: description || '',
         deadline: new Date(deadline),
       },
     });
@@ -72,20 +75,29 @@ async function createDocumentRequest(req, res) {
   }
 }
 
-// Intern uploads a document against one of their requests — a single
-// uploaded file (multer's upload.single('file')) plus a documentType.
+// Intern uploads a document against one of their requests, as one of
+// three types (req.body.uploadType, see utils/uploadTypes): a single File
+// or a compressed folder (Archive) — via multer's upload.single('file') —
+// or a Link (req.body.link). Plus a documentType.
 async function uploadDocument(req, res) {
   try {
     const requestId = Number(req.params.id);
     const request = await prisma.documentRequest.findUnique({ where: { id: requestId } });
-    if (!request) return res.status(404).json({ message: 'Document request not found.' });
+    if (!request) {
+      discardUpload(req.file);
+      return res.status(404).json({ message: 'Document request not found.' });
+    }
     if (request.internId !== req.user.id) {
+      discardUpload(req.file);
       return res.status(403).json({ message: 'You do not have permission to do this.' });
     }
+    if (!req.body.documentType) {
+      discardUpload(req.file);
+      return res.status(400).json({ message: 'documentType is required.' });
+    }
 
-    const file = req.file;
-    if (!file) return res.status(400).json({ message: 'A file is required.' });
-    if (!req.body.documentType) return res.status(400).json({ message: 'documentType is required.' });
+    const upload = resolveUpload(req);
+    if (upload.error) return res.status(400).json({ message: upload.error });
 
     const previousVersions = await prisma.document.findMany({ where: { requestId } });
 
@@ -93,8 +105,9 @@ async function uploadDocument(req, res) {
       data: {
         requestId,
         internId: req.user.id,
-        fileName: file.originalname,
-        fileUrl: `/uploads/${file.filename}`,
+        uploadType: upload.uploadType,
+        fileName: upload.fileName,
+        fileUrl: upload.fileUrl,
         documentType: req.body.documentType,
         version: previousVersions.length + 1,
       },

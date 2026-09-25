@@ -7,6 +7,8 @@ const {
   acceptApplication,
   rejectApplication,
   approveApplicationDocument,
+  cancelOwnApplication,
+  cancelApplicationAsAdmin,
 } = require('../controllers/applicationsController');
 const { requireAuth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/requireRole');
@@ -16,6 +18,9 @@ const { validateApplicationFileSizes } = require('../middleware/validateApplicat
 const router = express.Router();
 
 router.get('/check-email', checkEmailExists);
+// Public — the applicant has no account yet for a still-pending
+// application, so this can't require login. Identified by email alone.
+router.post('/cancel', cancelOwnApplication);
 router.post(
   '/',
   upload.fields([
@@ -34,5 +39,6 @@ router.get('/:id', requireAuth, requireRole('admin'), getApplication);
 router.post('/:id/accept', requireAuth, requireRole('admin'), acceptApplication);
 router.post('/:id/reject', requireAuth, requireRole('admin'), rejectApplication);
 router.post('/:id/approve-document', requireAuth, requireRole('admin'), approveApplicationDocument);
+router.post('/:id/cancel', requireAuth, requireRole('admin'), cancelApplicationAsAdmin);
 
 module.exports = router;

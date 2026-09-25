@@ -13,7 +13,9 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/', listCalendarEvents);
-router.post('/', requireRole('admin'), createCalendarEvent);
+// Supervisors can add events too (e.g. team-specific milestones), but
+// editing/deleting stays admin-only.
+router.post('/', requireRole('admin', 'supervisor'), createCalendarEvent);
 router.patch('/:id', requireRole('admin'), updateCalendarEvent);
 router.delete('/:id', requireRole('admin'), deleteCalendarEvent);
 

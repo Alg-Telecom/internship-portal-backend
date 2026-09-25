@@ -113,9 +113,12 @@ async function submitApplication(req, res) {
     await notifyAdmins({
       titleKey: "notifications.newApplication.title",
       messageKey: "notifications.newApplication.message",
+      // The translation string is '{name} submitted an internship
+      // application.' — it needs a single `name` param, not
+      // firstName/lastName separately, otherwise "{name}" shows up
+      // literally, unsubstituted.
       params: {
-        firstName: application.firstName,
-        lastName: application.lastName,
+        name: `${application.firstName} ${application.lastName}`,
       },
       notificationType: "Application",
       link: `/admin/applications/${application.id}`,
@@ -194,6 +197,7 @@ async function acceptApplication(req, res) {
         email: application.email,
         password: application.password, // reuse the applicant's own hash
         phoneNumber: application.phone,
+        studentId: application.personalId,
         university: application.university,
         fieldOfStudy: application.major,
         academicLevel: application.grade,
@@ -231,23 +235,48 @@ async function acceptApplication(req, res) {
       },
     });
 
+    const team = teamId
+      ? await prisma.team.findUnique({ where: { id: teamId } })
+      : null;
+
+    // Mirrors the old mock backend's message selection: pick the variant
+    // that matches whether the intern got their preferred team, got
+    // overridden to a different one, got assigned one with no stated
+    // preference, or (rarely) got no team at all yet. Team names in this
+    // app already end in "Team" (e.g. "Network and Infrastructure Team"),
+    // so the message text doesn't append its own "team" suffix — that
+    // would read as "...Team team".
+    const hasPreference =
+      application.teamPreference && application.teamPreference !== "No preference";
+    let messageKey = "notifications.applicationAccepted.messageDefault";
+    const notificationParams = {};
+    if (team && hasPreference && team.name === application.teamPreference) {
+      messageKey = "notifications.applicationAccepted.messagePreferred";
+      notificationParams.team = team.name;
+    } else if (team && hasPreference) {
+      messageKey = "notifications.applicationAccepted.messageOverridden";
+      notificationParams.team = team.name;
+      notificationParams.preferredTeam = application.teamPreference;
+    } else if (team) {
+      messageKey = "notifications.applicationAccepted.messageAssigned";
+      notificationParams.team = team.name;
+    }
+
     await createNotification({
       userId: intern.id,
       titleKey: "notifications.applicationAccepted.title",
-      messageKey: "notifications.applicationAccepted.message",
-      params: {},
+      messageKey,
+      params: notificationParams,
       notificationType: "Application",
       link: "/intern/dashboard",
     });
 
-    const team = teamId
-      ? await prisma.team.findUnique({ where: { id: teamId } })
-      : null;
     const { subject, html } = applicationAcceptedEmail({
       firstName: intern.firstName,
       email: intern.email,
       password: plainPassword,
       teamName: team ? team.name : "To be assigned",
+      preferredTeam: hasPreference ? application.teamPreference : null,
     });
     await sendMail({ to: intern.email, subject, html });
 
@@ -343,6 +372,65 @@ async function approveApplicationDocument(req, res) {
   }
 }
 
+// Public: the applicant cancels their own still-pending application,
+// identified by the email they applied with — there's no account to log
+// into yet for a Pending application, so this can't be behind requireAuth
+// like everything else in this controller.
+async function cancelOwnApplication(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: "Email is required." });
+    }
+
+    const application = await prisma.application.findFirst({
+      where: { email, status: "Pending" },
+    });
+    if (!application) {
+      return res
+        .status(404)
+        .json({ message: "No pending application found for that email." });
+    }
+
+    const updated = await prisma.application.update({
+      where: { id: application.id },
+      data: { status: "Cancelled", reviewedAt: new Date(), rawPassword: null },
+    });
+
+    return res.json(stripPassword(updated));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Something went wrong." });
+  }
+}
+
+// Admin: cancel a still-pending application on the candidate's behalf
+// (e.g. they asked by phone/email to withdraw). Same "already reviewed"
+// guard as accept/reject.
+async function cancelApplicationAsAdmin(req, res) {
+  try {
+    const id = Number(req.params.id);
+    const application = await prisma.application.findUnique({ where: { id } });
+    if (!application)
+      return res.status(404).json({ message: "Application not found." });
+    if (application.status !== "Pending") {
+      return res
+        .status(400)
+        .json({ message: "This application has already been reviewed." });
+    }
+
+    const updated = await prisma.application.update({
+      where: { id },
+      data: { status: "Cancelled", reviewedAt: new Date(), rawPassword: null },
+    });
+
+    return res.json(stripPassword(updated));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Something went wrong." });
+  }
+}
+
 module.exports = {
   checkEmailExists,
   submitApplication,
@@ -351,4 +439,6 @@ module.exports = {
   acceptApplication,
   rejectApplication,
   approveApplicationDocument,
+  cancelOwnApplication,
+  cancelApplicationAsAdmin,
 };

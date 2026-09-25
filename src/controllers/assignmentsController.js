@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const { createNotification } = require('../utils/notifications');
+const { resolveUpload, discardUpload } = require('../utils/uploadTypes');
 
 function scopeWhere(req, where = {}) {
   // Non-admins only ever see their own assignments — an intern's or a
@@ -106,7 +107,14 @@ async function updateAssignment(req, res) {
 
     const { deadline, ...rest } = req.body;
     const data = { ...rest };
-    if (deadline) data.deadline = new Date(deadline);
+    if (deadline) {
+      data.deadline = new Date(deadline);
+      // Moving a Late assignment's deadline to today or later makes it open
+      // again (the hourly job only ever flips things TO Late).
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (assignment.status === 'Late' && !data.status && data.deadline >= today) data.status = 'Pending';
+    }
 
     const updated = await prisma.assignment.update({ where: { id }, data });
     return res.json(updated);
@@ -116,26 +124,34 @@ async function updateAssignment(req, res) {
   }
 }
 
-// Intern submits their work for an assignment — a single uploaded file
-// (multer's upload.single('file')) plus optional notes.
+// Intern submits their work for an assignment, as one of three types
+// (req.body.uploadType): a single File, a compressed folder (Archive)
+// — both via multer's upload.single('file') — or a Link (req.body.link,
+// e.g. a GitHub repo or a shared doc). Plus optional notes.
 async function submitWork(req, res) {
+  const file = req.file;
   try {
     const assignmentId = Number(req.params.id);
     const assignment = await prisma.assignment.findUnique({ where: { id: assignmentId } });
-    if (!assignment) return res.status(404).json({ message: 'Assignment not found.' });
+    if (!assignment) {
+      discardUpload(file);
+      return res.status(404).json({ message: 'Assignment not found.' });
+    }
     if (assignment.internId !== req.user.id) {
+      discardUpload(file);
       return res.status(403).json({ message: 'You do not have permission to do this.' });
     }
 
-    const file = req.file;
-    if (!file) return res.status(400).json({ message: 'A file is required.' });
+    const upload = resolveUpload(req);
+    if (upload.error) return res.status(400).json({ message: upload.error });
 
     const submission = await prisma.submission.create({
       data: {
         assignmentId,
         internId: req.user.id,
-        fileName: file.originalname,
-        fileUrl: `/uploads/${file.filename}`,
+        submissionType: upload.uploadType,
+        fileName: upload.fileName,
+        fileUrl: upload.fileUrl,
         notes: req.body.notes || '',
         status: 'Submitted',
       },

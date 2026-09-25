@@ -7,6 +7,22 @@ function includeRelations() {
   };
 }
 
+// Used by the public application form (no login yet) to populate the
+// "preferred team" dropdown. Deliberately excludes supervisor/intern
+// personal data — unlike listTeams, this is reachable without auth.
+async function listPublicTeams(req, res) {
+  try {
+    const teams = await prisma.team.findMany({
+      select: { id: true, name: true, nameFr: true, nameAr: true, status: true },
+      orderBy: { id: 'asc' },
+    });
+    return res.json(teams);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+}
+
 async function listTeams(req, res) {
   try {
     const teams = await prisma.team.findMany({
@@ -83,4 +99,4 @@ async function updateTeam(req, res) {
   }
 }
 
-module.exports = { listTeams, getTeam, createTeam, updateTeam };
+module.exports = { listPublicTeams, listTeams, getTeam, createTeam, updateTeam };
