@@ -1,5 +1,5 @@
 const express = require('express');
-const { listPublicTeams, listTeams, getTeam, createTeam, updateTeam } = require('../controllers/teamsController');
+const { listPublicTeams, listTeams, getTeam, createTeam, updateTeam, completeTeam } = require('../controllers/teamsController');
 const { requireAuth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/requireRole');
 
@@ -16,5 +16,6 @@ router.get('/:id', getTeam);
 
 router.post('/', requireRole('admin'), createTeam);
 router.patch('/:id', requireRole('admin', 'supervisor'), updateTeam);
+router.post('/:id/complete', requireRole('admin'), completeTeam);
 
 module.exports = router;

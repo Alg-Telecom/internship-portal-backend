@@ -20,6 +20,7 @@ const {
   runDeadlineCheck,
   markOverdueItems,
 } = require("./utils/deadlineReminders");
+const { updateTeamStatuses } = require("./utils/teamStatus");
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
 
 const app = express();
@@ -76,6 +77,10 @@ cron.schedule("5 * * * *", () => {
   markOverdueItems().catch((err) =>
     console.error("[deadline-check] marking overdue failed:", err),
   );
+  // Teams: Planned -> Active on the start date, -> Completed after the end date.
+  updateTeamStatuses().catch((err) =>
+    console.error("[team-status] update failed:", err),
+  );
 });
 
 // Must come after every route above: catches unmatched routes, then any
@@ -98,5 +103,8 @@ app.listen(PORT, () => {
   // double as a check.
   runDeadlineCheck().catch((err) =>
     console.error("[deadline-check] failed:", err),
+  );
+  updateTeamStatuses().catch((err) =>
+    console.error("[team-status] update failed:", err),
   );
 });

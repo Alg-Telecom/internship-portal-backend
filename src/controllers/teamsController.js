@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { statusForDates } = require('../utils/teamStatus');
 
 function includeRelations() {
   return {
@@ -7,12 +8,17 @@ function includeRelations() {
   };
 }
 
+// Teams an applicant can still ask to join — Completed/Cancelled ones are
+// over. Also used to validate a submitted preference (applicationsController).
+const OPEN_TEAM_STATUSES = ['Planned', 'Active'];
+
 // Used by the public application form (no login yet) to populate the
 // "preferred team" dropdown. Deliberately excludes supervisor/intern
 // personal data — unlike listTeams, this is reachable without auth.
 async function listPublicTeams(req, res) {
   try {
     const teams = await prisma.team.findMany({
+      where: { status: { in: OPEN_TEAM_STATUSES } },
       select: { id: true, name: true, nameFr: true, nameAr: true, status: true },
       orderBy: { id: 'asc' },
     });
@@ -52,7 +58,8 @@ async function getTeam(req, res) {
 
 async function createTeam(req, res) {
   try {
-    const { name, nameFr, nameAr, description, startDate, endDate, status, supervisorId } = req.body;
+    // status is not taken from the request: it follows the dates (utils/teamStatus).
+    const { name, nameFr, nameAr, description, startDate, endDate, supervisorId } = req.body;
     if (!name || !startDate || !endDate) {
       return res.status(400).json({ message: 'name, startDate and endDate are required.' });
     }
@@ -65,7 +72,7 @@ async function createTeam(req, res) {
         description,
         startDate: new Date(startDate),
         endDate: new Date(endDate),
-        status: status || 'Planned',
+        status: statusForDates(startDate, endDate),
         supervisorId: supervisorId ? Number(supervisorId) : null,
       },
       include: includeRelations(),
@@ -81,11 +88,23 @@ async function createTeam(req, res) {
 async function updateTeam(req, res) {
   try {
     const id = Number(req.params.id);
-    const { startDate, endDate, supervisorId, ...rest } = req.body;
+    // status can't be edited directly: it follows the dates, and completing
+    // early goes through completeTeam below.
+    const { startDate, endDate, supervisorId, status: _ignored, ...rest } = req.body;
     const data = { ...rest };
     if (startDate) data.startDate = new Date(startDate);
     if (endDate) data.endDate = new Date(endDate);
     if (supervisorId !== undefined) data.supervisorId = supervisorId ? Number(supervisorId) : null;
+
+    // New dates on a Planned/Active team -> recompute its status right away
+    // (a Completed or Cancelled team stays as it is).
+    if (startDate || endDate) {
+      const existing = await prisma.team.findUnique({ where: { id } });
+      if (!existing) return res.status(404).json({ message: 'Team not found.' });
+      if (['Planned', 'Active'].includes(existing.status)) {
+        data.status = statusForDates(data.startDate || existing.startDate, data.endDate || existing.endDate);
+      }
+    }
 
     const team = await prisma.team.update({
       where: { id },
@@ -99,4 +118,26 @@ async function updateTeam(req, res) {
   }
 }
 
-module.exports = { listPublicTeams, listTeams, getTeam, createTeam, updateTeam };
+// Admin: mark a team Completed now, even before its end date. Final — the
+// automatic status update never reopens it.
+async function completeTeam(req, res) {
+  try {
+    const id = Number(req.params.id);
+    const existing = await prisma.team.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ message: 'Team not found.' });
+    if (!['Planned', 'Active'].includes(existing.status)) {
+      return res.status(400).json({ message: `This team is already ${existing.status}.` });
+    }
+    const team = await prisma.team.update({
+      where: { id },
+      data: { status: 'Completed' },
+      include: includeRelations(),
+    });
+    return res.json(team);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+}
+
+module.exports = { OPEN_TEAM_STATUSES, listPublicTeams, listTeams, getTeam, createTeam, updateTeam, completeTeam };

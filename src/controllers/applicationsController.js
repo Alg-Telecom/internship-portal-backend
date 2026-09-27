@@ -2,9 +2,13 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../config/prisma");
 const { notifyAdmins, createNotification } = require("../utils/notifications");
 const { sendMail } = require("../utils/mailer");
+const { discardUpload } = require("../utils/uploadTypes");
+const { OPEN_TEAM_STATUSES } = require("./teamsController");
 const {
   applicationAcceptedEmail,
   applicationRejectedEmail,
+  cancelledByInternEmail,
+  cancelledByAdminEmail,
 } = require("../utils/emailTemplates");
 
 // Maps the rejectedField the admin can send in POST /:id/reject (and now
@@ -33,8 +37,11 @@ const REJECTABLE_FIELDS = {
   },
 };
 
+// Never send either password field to a client: `password` is the bcrypt
+// hash, `rawPassword` the applicant's plaintext password kept only until
+// review so the acceptance email can include it (see acceptApplication).
 function stripPassword(application) {
-  const { password, ...safe } = application;
+  const { password, rawPassword, ...safe } = application;
   return safe;
 }
 
@@ -62,6 +69,22 @@ async function submitApplication(req, res) {
   try {
     const body = req.body;
     const files = req.files || {};
+
+    // The preferred team must still be open (Planned/Active) — the form
+    // only offers those, but a team can close while someone is applying.
+    if (body.teamPreference && body.teamPreference !== "No preference") {
+      const team = await prisma.team.findFirst({
+        where: { name: body.teamPreference, status: { in: OPEN_TEAM_STATUSES } },
+      });
+      if (!team) {
+        Object.values(files).flat().forEach(discardUpload);
+        return res.status(400).json({
+          code: "TEAM_UNAVAILABLE",
+          message: "The team you chose is no longer available. Please choose another team.",
+        });
+      }
+    }
+
     const passwordHash = await bcrypt.hash(body.password, 10);
 
     const cv = files.cvFile?.[0];
@@ -183,8 +206,10 @@ async function acceptApplication(req, res) {
     // applicant's own team preference by name.
     let teamId = req.body.teamId ? Number(req.body.teamId) : null;
     if (!teamId && application.teamPreference) {
+      // Only an open team — if the preferred one has since been completed
+      // or cancelled, the intern is left without a team for the admin to set.
       const preferredTeam = await prisma.team.findFirst({
-        where: { name: application.teamPreference },
+        where: { name: application.teamPreference, status: { in: OPEN_TEAM_STATUSES } },
       });
       if (preferredTeam) teamId = preferredTeam.id;
     }
@@ -372,30 +397,39 @@ async function approveApplicationDocument(req, res) {
   }
 }
 
-// Public: the applicant cancels their own still-pending application,
-// identified by the email they applied with — there's no account to log
-// into yet for a Pending application, so this can't be behind requireAuth
-// like everything else in this controller.
+// Public: the applicant cancels their own still-pending application —
+// there's no account to log into yet for a Pending application, so this
+// can't be behind requireAuth like everything else in this controller.
+// Instead the applicant proves it's theirs with the email AND the password
+// they chose when applying (application.password, a bcrypt hash), so
+// knowing someone's email alone is no longer enough to cancel it.
 async function cancelOwnApplication(req, res) {
   try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "Email is required." });
+    const email = (req.body.email || "").trim();
+    const { password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required." });
     }
 
     const application = await prisma.application.findFirst({
       where: { email, status: "Pending" },
     });
-    if (!application) {
+    // Same answer for "no pending application" and "wrong password", so the
+    // form can't be used to find out which emails have applied.
+    const matches = application && (await bcrypt.compare(password, application.password));
+    if (!matches) {
       return res
-        .status(404)
-        .json({ message: "No pending application found for that email." });
+        .status(401)
+        .json({ message: "Email or password is incorrect, or there is no pending application for this email." });
     }
 
     const updated = await prisma.application.update({
       where: { id: application.id },
       data: { status: "Cancelled", reviewedAt: new Date(), rawPassword: null },
     });
+
+    const { subject, html } = cancelledByInternEmail({ firstName: updated.firstName, stage: "application" });
+    await sendMail({ to: updated.email, subject, html });
 
     return res.json(stripPassword(updated));
   } catch (err) {
@@ -423,6 +457,9 @@ async function cancelApplicationAsAdmin(req, res) {
       where: { id },
       data: { status: "Cancelled", reviewedAt: new Date(), rawPassword: null },
     });
+
+    const { subject, html } = cancelledByAdminEmail({ firstName: updated.firstName, stage: "application" });
+    await sendMail({ to: updated.email, subject, html });
 
     return res.json(stripPassword(updated));
   } catch (err) {

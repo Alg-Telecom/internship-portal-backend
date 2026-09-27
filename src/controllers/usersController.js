@@ -2,11 +2,23 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../config/prisma');
 const { generateTemporaryPassword } = require('../utils/password');
 const { sendMail } = require('../utils/mailer');
-const { welcomeUserEmail } = require('../utils/emailTemplates');
+const { welcomeUserEmail, cancelledByInternEmail, cancelledByAdminEmail, accountReactivatedEmail } = require('../utils/emailTemplates');
 
 function stripPassword(user) {
   const { password, ...safe } = user;
   return safe;
+}
+
+// An intern's application mirrors whether their account is still usable:
+// deleting or deactivating the account (by an admin, or the intern
+// withdrawing themselves) marks it Cancelled; an admin reactivating the
+// account puts it back to Accepted. Only touches applications in the
+// opposite state, so Rejected/Pending ones are never affected.
+function applicationStatusSync(internId, isActive) {
+  return prisma.application.updateMany({
+    where: { internId, status: isActive ? 'Cancelled' : 'Accepted' },
+    data: { status: isActive ? 'Accepted' : 'Cancelled' },
+  });
 }
 
 async function listUsers(req, res) {
@@ -40,6 +52,17 @@ async function createUser(req, res) {
     if (!role || !firstName || !lastName || !email) {
       return res.status(400).json({ message: 'role, firstName, lastName and email are required.' });
     }
+    if (!['admin', 'supervisor', 'intern'].includes(role)) {
+      return res.status(400).json({ message: 'role must be admin, supervisor or intern.' });
+    }
+    if (role === 'intern' && (!rest.studentId || !rest.university)) {
+      return res.status(400).json({ message: 'studentId and university are required for an intern.' });
+    }
+    // Intern-only fields: an empty team select arrives as '' (no team yet).
+    if (role === 'intern') {
+      rest.teamId = rest.teamId ? Number(rest.teamId) : undefined;
+      rest.registrationDate = new Date();
+    }
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -63,11 +86,13 @@ async function createUser(req, res) {
     });
 
     // Announce the new account + generated password + role by email.
+    const team = user.teamId ? await prisma.team.findUnique({ where: { id: user.teamId } }) : null;
     const { subject, html } = welcomeUserEmail({
       firstName: user.firstName,
       email: user.email,
       temporaryPassword,
       role: user.role,
+      teamName: team ? team.name : null,
     });
     await sendMail({ to: user.email, subject, html });
 
@@ -82,7 +107,21 @@ async function updateUser(req, res) {
   try {
     const id = Number(req.params.id);
     const { password, ...patch } = req.body; // never let this route touch the password
+    const before = await prisma.user.findUnique({ where: { id }, select: { isActive: true } });
     const user = await prisma.user.update({ where: { id }, data: patch });
+    if (user.role === 'intern' && typeof patch.isActive === 'boolean') {
+      await applicationStatusSync(id, patch.isActive);
+      // Only on an actual active -> inactive change, not a repeated click.
+      if (before && before.isActive && !patch.isActive) {
+        const { subject, html } = cancelledByAdminEmail({ firstName: user.firstName, stage: 'internship' });
+        await sendMail({ to: user.email, subject, html });
+      }
+      // ... and inactive -> active: tell them they can log in again.
+      if (before && !before.isActive && patch.isActive) {
+        const { subject, html } = accountReactivatedEmail({ firstName: user.firstName, email: user.email });
+        await sendMail({ to: user.email, subject, html });
+      }
+    }
     return res.json(stripPassword(user));
   } catch (err) {
     console.error(err);
@@ -130,6 +169,13 @@ async function deleteUser(req, res) {
     const existing = await prisma.user.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ message: 'User not found.' });
 
+    // Deleting is permanent, so it's a two-step action: an account must be
+    // deactivated first (which also sends the intern their cancellation
+    // email and cancels their application — see updateUser).
+    if (existing.isActive) {
+      return res.status(400).json({ message: 'Deactivate this user before deleting them.' });
+    }
+
     if (existing.role === 'intern') {
       const pendingAssignments = await prisma.assignment.count({
         where: { internId: id, status: { in: ['Pending', 'InProgress', 'Submitted', 'Late'] } },
@@ -158,10 +204,14 @@ async function deleteUser(req, res) {
         prisma.assignment.deleteMany({ where: { id: { in: assignmentIds } } }),
         prisma.attendance.deleteMany({ where: { internId: id } }),
         // The application that got this intern accepted still exists as a
-        // historical record — just detach it rather than delete it too.
+        // historical record — mark it Cancelled (the account behind it is
+        // gone) and detach it rather than delete it too.
+        prisma.application.updateMany({ where: { internId: id, status: 'Accepted' }, data: { status: 'Cancelled' } }),
         prisma.application.updateMany({ where: { internId: id }, data: { internId: null } }),
         prisma.user.delete({ where: { id } }),
       ]);
+      // No email here: only deactivated users can be deleted, and they were
+      // already emailed when they were deactivated.
       return res.status(204).send();
     }
 
@@ -205,6 +255,11 @@ async function uploadOwnPhoto(req, res) {
 async function deactivateOwnAccount(req, res) {
   try {
     await prisma.user.update({ where: { id: req.user.id }, data: { isActive: false } });
+    if (req.user.role === 'intern') {
+      await applicationStatusSync(req.user.id, false);
+      const { subject, html } = cancelledByInternEmail({ firstName: req.user.firstName, stage: 'internship' });
+      await sendMail({ to: req.user.email, subject, html });
+    }
     res.clearCookie('imp_token');
     return res.json({ message: 'Account deactivated.' });
   } catch (err) {
