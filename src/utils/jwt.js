@@ -9,7 +9,8 @@ function signToken(user) {
 }
 
 function verifyToken(token) {
-  return jwt.verify(token, process.env.JWT_SECRET);
+  // Only accept tokens signed the way signToken signs them (HS256).
+  return jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
 }
 
 module.exports = { signToken, verifyToken };

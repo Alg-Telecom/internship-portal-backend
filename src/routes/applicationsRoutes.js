@@ -14,15 +14,18 @@ const { requireAuth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/requireRole');
 const { upload } = require('../middleware/upload');
 const { validateApplicationFileSizes } = require('../middleware/validateApplicationFileSizes');
+const { applicationSubmitLimiter, applicationCancelLimiter, emailCheckLimiter } = require('../middleware/rateLimit');
 
 const router = express.Router();
 
-router.get('/check-email', checkEmailExists);
+router.get('/check-email', emailCheckLimiter, checkEmailExists);
 // Public — the applicant has no account yet for a still-pending
-// application, so this can't require login. Identified by email alone.
-router.post('/cancel', cancelOwnApplication);
+// application, so this can't require login. Identified by the email and
+// password they applied with.
+router.post('/cancel', applicationCancelLimiter, cancelOwnApplication);
 router.post(
   '/',
+  applicationSubmitLimiter, // before the upload, so blocked spam never writes files
   upload.fields([
     { name: 'cvFile', maxCount: 1 },
     { name: 'photoFile', maxCount: 1 },

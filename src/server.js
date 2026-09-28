@@ -23,11 +23,26 @@ const {
 const { updateTeamStatuses } = require("./utils/teamStatus");
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
 
+const { checkEnv } = require("./config/checkEnv");
+
+// Stops the server in production if a secret is missing or weak.
+checkEnv();
+
 const app = express();
 
+// Behind a reverse proxy (nginx, Render, Railway...) the visitor's real IP
+// is in X-Forwarded-For. Set TRUST_PROXY=1 (one proxy hop) in production so
+// rate limiting (middleware/rateLimit.js) counts each visitor separately.
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set("trust proxy", Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
+}
+
+// Only the frontend may call the API with cookies — its address comes from
+// FRONTEND_URL (the same variable used for password-reset links).
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
     credentials: true,
   }),
 );
