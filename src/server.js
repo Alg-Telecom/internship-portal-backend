@@ -40,9 +40,18 @@ if (process.env.TRUST_PROXY) {
 
 // Only the frontend may call the API with cookies — its address comes from
 // FRONTEND_URL (the same variable used for password-reset links).
+// EXTRA_CORS_ORIGINS (optional, comma-separated) adds more allowed addresses,
+// e.g. the built site served on your Wi-Fi IP to test from a phone.
+const allowedOrigins = [
+  process.env.FRONTEND_URL || "http://localhost:5173",
+  ...(process.env.EXTRA_CORS_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+];
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: allowedOrigins,
     credentials: true,
   }),
 );
