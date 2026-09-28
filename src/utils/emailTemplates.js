@@ -201,6 +201,37 @@ function accountReactivatedEmail({ firstName, email }) {
   };
 }
 
+// Supervisor / administrator accounts (interns get cancelledByAdminEmail and
+// accountReactivatedEmail above, which talk about their internship).
+function staffAccountDeactivatedEmail({ firstName, role }) {
+  const label = (ROLE_INFO[role] || { label: role }).label;
+  return {
+    subject: `Your ${label} account has been deactivated`,
+    html: `
+      <p>Hi ${firstName},</p>
+      <p>Your <strong>${label}</strong> account on the Internship Management Portal has been <strong>deactivated</strong> by the internship administration. You can no longer log in to the portal.</p>
+      <p>If you have any questions, or think this was a mistake, please contact the internship administration.</p>
+    `,
+  };
+}
+
+function staffAccountReactivatedEmail({ firstName, email, role }) {
+  const label = (ROLE_INFO[role] || { label: role }).label;
+  return {
+    subject: `Your ${label} account has been reactivated`,
+    html: `
+      <p>Hi ${firstName},</p>
+      <p>Good news: your <strong>${label}</strong> account on the Internship Management Portal has been <strong>reactivated</strong> by the internship administration.</p>
+      <p>You can log in to the portal again with your usual email and password:</p>
+      <ul>
+        <li><strong>Email:</strong> ${email}</li>
+        <li><strong>Role:</strong> ${label}</li>
+      </ul>
+      <p>If you no longer remember your password, use <strong>"Forgot password"</strong> on the login page.</p>
+    `,
+  };
+}
+
 // Sent after a successful password reset (authController#resetPassword),
 // so the owner notices if someone else reset it.
 function passwordWasResetEmail({ firstName }) {
@@ -216,6 +247,8 @@ function passwordWasResetEmail({ firstName }) {
 }
 
 module.exports = {
+  staffAccountDeactivatedEmail,
+  staffAccountReactivatedEmail,
   passwordWasResetEmail,
   accountReactivatedEmail,
   cancelledByInternEmail,

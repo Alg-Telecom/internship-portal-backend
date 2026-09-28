@@ -2,7 +2,14 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../config/prisma');
 const { generateTemporaryPassword } = require('../utils/password');
 const { sendMail } = require('../utils/mailer');
-const { welcomeUserEmail, cancelledByInternEmail, cancelledByAdminEmail, accountReactivatedEmail } = require('../utils/emailTemplates');
+const {
+  welcomeUserEmail,
+  cancelledByInternEmail,
+  cancelledByAdminEmail,
+  accountReactivatedEmail,
+  staffAccountDeactivatedEmail,
+  staffAccountReactivatedEmail,
+} = require('../utils/emailTemplates');
 
 function stripPassword(user) {
   const { password, ...safe } = user;
@@ -109,6 +116,13 @@ async function updateUser(req, res) {
     const { password, ...patch } = req.body; // never let this route touch the password
     const before = await prisma.user.findUnique({ where: { id }, select: { isActive: true } });
     const user = await prisma.user.update({ where: { id }, data: patch });
+    // Supervisors / administrators: email only on an actual status change.
+    if (user.role !== 'intern' && typeof patch.isActive === 'boolean' && before && before.isActive !== patch.isActive) {
+      const { subject, html } = patch.isActive
+        ? staffAccountReactivatedEmail({ firstName: user.firstName, email: user.email, role: user.role })
+        : staffAccountDeactivatedEmail({ firstName: user.firstName, role: user.role });
+      await sendMail({ to: user.email, subject, html });
+    }
     if (user.role === 'intern' && typeof patch.isActive === 'boolean') {
       await applicationStatusSync(id, patch.isActive);
       // Only on an actual active -> inactive change, not a repeated click.
