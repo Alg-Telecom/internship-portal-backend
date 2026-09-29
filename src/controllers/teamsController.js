@@ -1,5 +1,5 @@
 const prisma = require('../config/prisma');
-const { statusForDates } = require('../utils/teamStatus');
+const { statusForDates, completeAndEmptyTeamsOps } = require('../utils/teamStatus');
 
 function includeRelations() {
   return {
@@ -73,7 +73,8 @@ async function createTeam(req, res) {
         startDate: new Date(startDate),
         endDate: new Date(endDate),
         status: statusForDates(startDate, endDate),
-        supervisorId: supervisorId ? Number(supervisorId) : null,
+        // A team created already finished (past dates) gets no supervisor.
+        supervisorId: supervisorId && statusForDates(startDate, endDate) !== 'Completed' ? Number(supervisorId) : null,
       },
       include: includeRelations(),
     });
@@ -96,14 +97,25 @@ async function updateTeam(req, res) {
     if (endDate) data.endDate = new Date(endDate);
     if (supervisorId !== undefined) data.supervisorId = supervisorId ? Number(supervisorId) : null;
 
+    const existing = await prisma.team.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ message: 'Team not found.' });
+
+    // A Completed team has no members and gets no new supervisor.
+    if (existing.status === 'Completed' && data.supervisorId) {
+      return res.status(400).json({ message: 'This team is completed: it cannot get a supervisor.' });
+    }
+
     // New dates on a Planned/Active team -> recompute its status right away
     // (a Completed or Cancelled team stays as it is).
-    if (startDate || endDate) {
-      const existing = await prisma.team.findUnique({ where: { id } });
-      if (!existing) return res.status(404).json({ message: 'Team not found.' });
-      if (['Planned', 'Active'].includes(existing.status)) {
-        data.status = statusForDates(data.startDate || existing.startDate, data.endDate || existing.endDate);
-      }
+    if ((startDate || endDate) && ['Planned', 'Active'].includes(existing.status)) {
+      data.status = statusForDates(data.startDate || existing.startDate, data.endDate || existing.endDate);
+    }
+
+    // The new dates end the team: save the edit, then empty it.
+    if (data.status === 'Completed') {
+      delete data.supervisorId;
+      await prisma.$transaction([prisma.team.update({ where: { id }, data }), ...completeAndEmptyTeamsOps([id])]);
+      return res.json(await prisma.team.findUnique({ where: { id }, include: includeRelations() }));
     }
 
     const team = await prisma.team.update({
@@ -119,7 +131,8 @@ async function updateTeam(req, res) {
 }
 
 // Admin: mark a team Completed now, even before its end date. Final — the
-// automatic status update never reopens it.
+// automatic status update never reopens it. Like an automatic completion,
+// the team is emptied: its interns leave it and its supervisor is removed.
 async function completeTeam(req, res) {
   try {
     const id = Number(req.params.id);
@@ -128,12 +141,8 @@ async function completeTeam(req, res) {
     if (!['Planned', 'Active'].includes(existing.status)) {
       return res.status(400).json({ message: `This team is already ${existing.status}.` });
     }
-    const team = await prisma.team.update({
-      where: { id },
-      data: { status: 'Completed' },
-      include: includeRelations(),
-    });
-    return res.json(team);
+    await prisma.$transaction(completeAndEmptyTeamsOps([id]));
+    return res.json(await prisma.team.findUnique({ where: { id }, include: includeRelations() }));
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Something went wrong.' });

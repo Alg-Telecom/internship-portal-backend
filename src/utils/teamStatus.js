@@ -22,14 +22,29 @@ function statusForDates(startDate, endDate, now = new Date()) {
   return 'Planned';
 }
 
+// A Completed team is emptied: its interns leave it (teamId = null, their
+// accounts stay active) and its supervisor is unassigned. Used by the
+// hourly job below, the admin's "Complete" button and date edits
+// (teamsController). Returns Prisma operations to run in one transaction.
+function completeAndEmptyTeamsOps(teamIds) {
+  return [
+    prisma.user.updateMany({ where: { teamId: { in: teamIds } }, data: { teamId: null } }),
+    prisma.team.updateMany({ where: { id: { in: teamIds } }, data: { status: 'Completed', supervisorId: null } }),
+  ];
+}
+
 // Hourly + on server start (see server.js): moves Planned/Active teams
 // along as their dates are reached.
 async function updateTeamStatuses(now = new Date()) {
   const today = startOfDay(now);
-  const completed = await prisma.team.updateMany({
-    where: { status: { in: ['Planned', 'Active'] }, endDate: { lt: today } },
-    data: { status: 'Completed' },
-  });
+  const endedIds = (
+    await prisma.team.findMany({
+      where: { status: { in: ['Planned', 'Active'] }, endDate: { lt: today } },
+      select: { id: true },
+    })
+  ).map((t) => t.id);
+  const completed = { count: endedIds.length };
+  if (endedIds.length) await prisma.$transaction(completeAndEmptyTeamsOps(endedIds));
   // Start date reached (today or earlier) but end date not passed yet.
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -42,4 +57,4 @@ async function updateTeamStatuses(now = new Date()) {
   }
 }
 
-module.exports = { statusForDates, updateTeamStatuses };
+module.exports = { statusForDates, updateTeamStatuses, completeAndEmptyTeamsOps };

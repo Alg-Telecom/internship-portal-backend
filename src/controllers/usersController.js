@@ -28,6 +28,15 @@ function applicationStatusSync(internId, isActive) {
   });
 }
 
+// An intern can't be placed in a Completed team (completed teams are
+// emptied — see utils/teamStatus). Returns an error message or null.
+async function completedTeamError(teamId) {
+  if (!teamId) return null;
+  const team = await prisma.team.findUnique({ where: { id: Number(teamId) }, select: { status: true } });
+  if (!team) return 'Team not found.';
+  return team.status === 'Completed' ? 'This team is completed: interns cannot be added to it.' : null;
+}
+
 async function listUsers(req, res) {
   try {
     const { role } = req.query;
@@ -68,6 +77,8 @@ async function createUser(req, res) {
     // Intern-only fields: an empty team select arrives as '' (no team yet).
     if (role === 'intern') {
       rest.teamId = rest.teamId ? Number(rest.teamId) : undefined;
+      const teamError = await completedTeamError(rest.teamId);
+      if (teamError) return res.status(400).json({ message: teamError });
       rest.registrationDate = new Date();
     }
 
@@ -114,6 +125,8 @@ async function updateUser(req, res) {
   try {
     const id = Number(req.params.id);
     const { password, ...patch } = req.body; // never let this route touch the password
+    const teamError = patch.teamId ? await completedTeamError(patch.teamId) : null;
+    if (teamError) return res.status(400).json({ message: teamError });
     const before = await prisma.user.findUnique({ where: { id }, select: { isActive: true } });
     const user = await prisma.user.update({ where: { id }, data: patch });
     // Supervisors / administrators: email only on an actual status change.
