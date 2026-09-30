@@ -70,6 +70,27 @@ async function submitApplication(req, res) {
     const body = req.body;
     const files = req.files || {};
 
+    // One application per email: refuse if that email already has an account
+    // or an application in progress (Pending/Accepted) — same rule as the
+    // form's check-email step, enforced here too. Rejected or cancelled
+    // applicants may apply again.
+    const email = (body.email || "").trim();
+    if (email) {
+      const [existingUser, existingApplication] = await Promise.all([
+        prisma.user.findUnique({ where: { email } }),
+        prisma.application.findFirst({
+          where: { email, status: { notIn: ["Rejected", "Cancelled"] } },
+        }),
+      ]);
+      if (existingUser || existingApplication) {
+        Object.values(files).flat().forEach(discardUpload);
+        return res.status(409).json({
+          code: "EMAIL_ALREADY_USED",
+          message: "An account or an application in progress already uses this email.",
+        });
+      }
+    }
+
     // The preferred team must still be open (Planned/Active) — the form
     // only offers those, but a team can close while someone is applying.
     if (body.teamPreference && body.teamPreference !== "No preference") {
@@ -332,6 +353,13 @@ async function rejectApplication(req, res) {
     const application = await prisma.application.findUnique({ where: { id } });
     if (!application)
       return res.status(404).json({ message: "Application not found." });
+    // Same guard as accept/cancel: an accepted (or already rejected /
+    // cancelled) application can't be rejected afterwards.
+    if (application.status !== "Pending") {
+      return res
+        .status(400)
+        .json({ message: "This application has already been reviewed." });
+    }
 
     const data = {
       status: "Rejected",

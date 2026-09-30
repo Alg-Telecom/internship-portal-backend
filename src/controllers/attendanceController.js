@@ -50,6 +50,18 @@ async function markAttendance(req, res) {
       return res.status(400).json({ message: 'internId, date and status are required.' });
     }
 
+    const intern = await prisma.user.findUnique({ where: { id: Number(internId) } });
+    if (!intern || intern.role !== 'intern') {
+      return res.status(404).json({ message: 'Intern not found.' });
+    }
+    // A supervisor records attendance only for interns of a team they supervise.
+    if (req.user.role === 'supervisor') {
+      const team = intern.teamId ? await prisma.team.findUnique({ where: { id: intern.teamId } }) : null;
+      if (!team || team.supervisorId !== req.user.id) {
+        return res.status(403).json({ message: 'You do not have permission to do this.' });
+      }
+    }
+
     const day = startOfDay(date);
     const record = await prisma.attendance.upsert({
       where: { internId_date: { internId: Number(internId), date: day } },

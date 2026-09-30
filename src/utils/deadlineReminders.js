@@ -47,7 +47,7 @@ async function sendOnce({ entityType, entityId, kind, deadline }, send) {
     // utils/mailer#sendMail never throws — it logs and returns null on
     // failure — so a null result counts as a failed send too.
     sent = await send();
-  } catch (err) {
+  } catch {
     sent = null;
   }
   if (!sent) {

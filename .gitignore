@@ -1,6 +1,23 @@
+# Dependencies
 node_modules/
+
+# Secrets — only .env.example may be committed
 .env
 .env.*
 !.env.example
+
+# Generated Prisma client
 /src/generated/prisma
-uploads/
+
+# Files uploaded by users (CVs, photos, submissions) — personal data
+uploads/*
+!uploads/.gitkeep
+
+# Logs, reports and editor files
+*.log
+snyk-*.json
+coverage/
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/

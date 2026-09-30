@@ -18,7 +18,7 @@ async function requireAuth(req, res, next) {
     delete user.password; // never leak the hash to routes/response
     req.user = user;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ message: 'Not authenticated.' });
   }
 }

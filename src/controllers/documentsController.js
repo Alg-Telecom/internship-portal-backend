@@ -4,6 +4,9 @@ const { createNotification } = require('../utils/notifications');
 async function approveDocument(req, res) {
   try {
     const id = Number(req.params.id);
+    if (!(await prisma.document.findUnique({ where: { id } }))) {
+      return res.status(404).json({ message: 'Document not found.' });
+    }
     const document = await prisma.document.update({
       where: { id },
       data: { status: 'Approved', rejectionReason: '' },
@@ -30,6 +33,12 @@ async function rejectDocument(req, res) {
   try {
     const id = Number(req.params.id);
     const { rejectionReason } = req.body;
+    if (!rejectionReason || !String(rejectionReason).trim()) {
+      return res.status(400).json({ message: 'rejectionReason is required.' });
+    }
+    if (!(await prisma.document.findUnique({ where: { id } }))) {
+      return res.status(404).json({ message: 'Document not found.' });
+    }
     const document = await prisma.document.update({
       where: { id },
       data: { status: 'Rejected', rejectionReason: rejectionReason || '' },

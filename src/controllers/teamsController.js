@@ -100,6 +100,15 @@ async function updateTeam(req, res) {
     const existing = await prisma.team.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ message: 'Team not found.' });
 
+    // A supervisor may only edit the team they supervise, and can't hand it
+    // to someone else (assigning supervisors is the admin's job).
+    if (req.user.role === 'supervisor') {
+      if (existing.supervisorId !== req.user.id) {
+        return res.status(403).json({ message: 'You do not have permission to do this.' });
+      }
+      delete data.supervisorId;
+    }
+
     // A Completed team has no members and gets no new supervisor.
     if (existing.status === 'Completed' && data.supervisorId) {
       return res.status(400).json({ message: 'This team is completed: it cannot get a supervisor.' });
